@@ -551,45 +551,43 @@ def run_full_pipeline():
         st.markdown("### 5️⃣ Diepe Ingrediënten-check (Feit-check)")
         run_ingredient_logic()
 
-    st.balloons()
     st.success("🎉 De volledige pijplijn is succesvol voltooid! Je Google Sheet is nu volledig up-to-date.")
 
 
 # --- 3. UI LAYOUT ---
 
 def main():
-    # De titel en instructies staan nu VEILIG binnen main()
     st.title("ProVeg Eiweet Validatie Manager 🌱")
 
     st.info("""
     ### 📖 Instructies
     Deze app werkt met de bijbehorende Google Sheet: **"Eiweet validatie met AI"**.
     
-    1. **Data:** Plak je data in **"Producten Input"**.
-    2. **Workflow:** Doorloop stappen **1 t/m 5** in die volgorde.
+    1. **Data:** Plak je ruwe productdata in het tabblad **"Producten Input"**.
+    2. **Workflow:** Doorloop altijd de stappen **1 t/m 5** in deze volgorde.
     """)
 
-    # Sidebar voor de Master Run
-    st.sidebar.header("Automatische piloot")
-    if st.sidebar.button("🚀 MASTER RUN (Stap 1-5)", use_container_width=True, type="primary"):
-        run_full_pipeline()
-
-    # Knoppen op de hoofdpagina
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("1️⃣ Prep Ingrediëntenlijst", use_container_width=True): run_prep_ingredients()
-    with col2:
-        if st.button("2️⃣ AI Classificatie Masterlijst", use_container_width=True): run_ai_classifier()
-
-    col3, col4 = st.columns(2)
-    with col3:
-        if st.button("3️⃣ AI Product Analyse", use_container_width=True): run_first_pass_and_review()
-    with col4:
-        if st.button("4️⃣ Diepe Check (Feit-check)", use_container_width=True): run_ingredient_logic()
+    # Stappen 1 t/m 5 onder elkaar, volledige breedte, dezelfde kleur
+    if st.button("1️⃣ Prep Ingrediëntenlijst", use_container_width=True): 
+        run_prep_ingredients()
+        
+    if st.button("2️⃣ AI Classificatie Masterlijst", use_container_width=True): 
+        run_ai_classifier()
+        
+    if st.button("3️⃣ AI Product Analyse", use_container_width=True): 
+        run_first_pass_and_review()
+        
+    if st.button("4️⃣ Diepe Ingrediënten-check", use_container_width=True): 
+        run_ingredient_logic()
+        
+    if st.button("5️⃣ Genereer Supermarkt Rapporten", use_container_width=True): 
+        run_reports()
 
     st.divider()
-    if st.button("5️⃣ Genereer Vendor Rapporten", use_container_width=True, type="primary"): run_reports()
 
-# Dit zorgt dat de app start zonder dubbele elementen
+    # Master Run knop eronder, opvallend rood (primary)
+    if st.button("🔥 VOER VOLLEDIGE PIJPLIJN UIT (STAP 1-5)", type="primary", use_container_width=True):
+        run_full_pipeline()
+
 if __name__ == "__main__":
     main()
