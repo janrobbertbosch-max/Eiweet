@@ -9,8 +9,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 1. CONFIGURATIE & HELPER FUNCTIES ---
 
-st.set_page_config(page_title="Eiweet Pipeline Manager", page_icon="🍏", layout="wide")
-
 def get_google_sheet_client():
     """Haalt credentials uit Streamlit Secrets."""
     try:
@@ -61,18 +59,36 @@ def run_prep_ingredients():
 
         def sanitize(ingr):
             if not isinstance(ingr, str) or ingr == "": return ""
-            # Verwijder alles voor "Ingrediënten:"
-            if "Ingrediënten:" in ingr: ingr = ingr.split("Ingrediënten:", 1)[1]
-            # Verwijder sporeninformatie
+            
+            # 1. Basis opschoning
+            if "Ingrediënten:" in ingr: 
+                ingr = ingr.split("Ingrediënten:", 1)[1]
+            
             sanitized = re.split(r"\bsporen\b|kan.*bevatten", ingr, flags=re.IGNORECASE)[0]
-            # Verwijder moeilijke woorden
+            
             for word in difficult_words:
                 sanitized = re.sub(rf"\b{re.escape(word)}\b", "", sanitized, flags=re.IGNORECASE)
-            # Verwijder percentages (bijv. 15%)
+            
             sanitized = re.sub(r"\d+([\.,]\d+)?\s*%", "", sanitized)
-            # Verwijder leestekens
-            sanitized = re.sub(r"[;,():<>{}\[\]\.]", " ", sanitized)
-            # Dubbele spaties weghalen
+
+            # 2. SLIMME HAAKJES LOGICA
+            def smart_brackets(match):
+                content = match.group(1) # De tekst tussen de haakjes
+                # Als er een komma in de tekst staat, is het een opsomming
+                if "," in content:
+                    return " " + content + " " # Haakjes weg, inhoud blijft
+                else:
+                    return f"({content})" # Laat staan (of gebruik match.group(0))
+
+            # Pas dit toe op (), [], <> en {}
+            # De regex r"[\(\{\[\<] (.*?) [\)\}\]\>]" zoekt tekst tussen alle soorten haakjes
+            sanitized = re.sub(r"[\(\{\[](.*?)[\)\}\]]", smart_brackets, sanitized)
+
+            # 3. Verwijder overige leestekens (behalve de haakjes die we wilden laten staan)
+            # We verwijderen nu puntkomma's, punten, etc. maar laten letters/cijfers en haakjes met rust
+            sanitized = re.sub(r"[;,:\.]", " ", sanitized)
+            
+            # 4. Dubbele spaties en afronding
             return re.sub(r"\s{2,}", " ", sanitized).strip()
 
         st.write("🧹 Ingrediëntenlijsten opschonen...")
@@ -115,13 +131,16 @@ def run_prep_ingredients():
     st.success(f"**Gereed!** In totaal zijn {len(df_products)} producten verwerkt. Er zijn **{num_new}** nieuwe ingrediënten gevonden en toegevoegd aan de masterlijst voor verdere AI-analyse.")
 
 def run_ai_classifier():
-    """Stap 2: Onverwoestbare Batch Classifier voor de Masterlijst"""
     client = get_google_sheet_client()
     if client is None:
         st.error("❌ Geen verbinding met Google Sheets.")
         return
 
-    with st.status("Stap 2: AI Classificatie (Masterlijst)...") as status:
+    with st.expander("🔍 Bekijk AI Systeem Prompt (Stap 2)"):
+        st.markdown("**Systeem Instructie:**")
+        st.code("Bepaal voor elk ingrediënt:\n1. Is het een bron van eiwit? (Wel/Niet)\n2. Wat is de oorsprong? (Plantaardig/Dierlijk/Niet relevant)\n\nAntwoord STRIKT per regel in dit formaat: ID: ROL, TYPE", language="text")
+
+    with st.status("Stap 2: Classificeer Ingredientenlijst met AI") as status:
         st.write("🔄 Masterlijst ophalen...")
         sheet = client.open("Eiweet validatie met AI").worksheet("Ingredienten Database")
         df = pd.DataFrame(sheet.get_all_records())
@@ -215,13 +234,23 @@ def run_ai_classifier():
 
 
 def run_first_pass_and_review():
-    """Stap 3 & 4: Snelle Product Analyse (Batch Mode) met tijd-tracking"""
+    """Stap 3: Snelle Product Analyse (Batch Mode) met tijd-tracking"""
     client = get_google_sheet_client()
     if client is None:
         st.error("❌ Geen verbinding met Google Sheets.")
         return
     
-    with st.status("Stap 3 & 4: Product classificatie & Review check...") as status:
+    with st.expander("🔍 Bekijk AI Systeem Prompt (Stap 3 - Product Analyse)"):
+        st.markdown("**Systeem Instructie (Expert Persona):**")
+        st.code("""
+        Je bent een senior voedingsmiddelenexpert gespecialiseerd in eiwitbronnen. 
+        Classificeer de volgende producten strikt als 'Plantaardig', 'Dierlijk' of 'Combinatie'.
+        Geef per product één korte zin uitleg (rationale).
+
+        Antwoord STRIKT in dit formaat: ID: oordeel | rationale
+        """, language="text")
+    
+    with st.status("Stap 3: Check Eiweetgroep van alle producten met AI...") as status:
         st.write("🔄 Productdata ophalen uit Google Sheets...")
         sheet = client.open("Eiweet validatie met AI").worksheet("Producten Input")
         df = pd.DataFrame(sheet.get_all_records())
@@ -339,7 +368,7 @@ def run_first_pass_and_review():
         sheet.clear()
         sheet.update(values=[df.columns.tolist()] + df.where(pd.notnull(df), None).values.tolist(), range_name='A1')
         
-        status.update(label=f"✅ Stap 3 & 4 Voltooid! {num_reviews} reviews gemarkeerd.", state="complete")
+        status.update(label=f"✅ Stap 3 Voltooid! {num_reviews} reviews gemarkeerd.", state="complete")
     
     # Eindrapportage
     if num_reviews > 0:
@@ -348,58 +377,14 @@ def run_first_pass_and_review():
         st.success("**Gereed!** De AI is het volledig eens met de supermarkt labels.")
         current_time_str = datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
 
-        for i in range(0, len(to_process), batch_size):
-            batch_df = to_process.iloc[i : i + batch_size]
-            batch_num = i//batch_size + 1
-            status.write(f"Bezig met batch {batch_num}...")
-
-            prompt_items = [f"ID:{idx} | Product:{row['Productnaam']}" for idx, row in batch_df.iterrows()]
-            prompt = f"""
-            Classificeer de volgende producten strikt als 'Plantaardig', 'Dierlijk' of 'Combinatie'.
-            Antwoord strikt in dit formaat: ID: oordeel
-            
-            Producten:
-            {chr(10).join(prompt_items)}
-            """
-            
-            try:
-                raw_response = call_gemini(prompt)
-                matches_in_batch = 0
-                
-                for line in raw_response.split('\n'):
-                    if ":" in line:
-                        parts = line.rsplit(":", 1)
-                        label = parts[1].strip().replace(".", "").capitalize()
-                        idx_match = re.search(r'(\d+)', parts[0])
-                        
-                        if idx_match and label in geldige_class:
-                            idx = int(idx_match.group(1))
-                            if idx in df.index:
-                                df.at[idx, 'First pass AI'] = label
-                                # Update met de tijd van verwerking
-                                df.at[idx, 'First pass AI datum'] = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
-                                matches_in_batch += 1
-                
-                status.write(f"✅ Batch {batch_num}: {matches_in_batch} producten verwerkt om {datetime.datetime.now().strftime('%H:%M:%S')}")
-                
-            except Exception as e:
-                st.error(f"Fout in batch {batch_num}: {e}")
-            
-            # Sla vaker tussentijds op (elke 3 batches) voor zichtbaarheid
-            if batch_num % 3 == 0:
-                sheet.update(values=[df.columns.tolist()] + df.where(pd.notnull(df), None).values.tolist(), range_name='A1')
-                status.write(f"💾 Tussentijdse backup opgeslagen in Google Sheets om {datetime.datetime.now().strftime('%H:%M:%S')}")
-
-            time.sleep(0.5)
-
 def run_ingredient_logic():
-    """Stap 5: Diepe analyse op basis van de ingrediënten-masterlijst"""
+    """Stap 4: Diepe analyse op basis van de ingrediënten-masterlijst"""
     client = get_google_sheet_client()
     if client is None:
         st.error("❌ Geen verbinding met Google Sheets.")
         return
 
-    with st.status("Stap 5: Ingrediënten-check per product...") as status:
+    with st.status("Stap 4: Ingrediënten-check per product...") as status:
         st.write("🔄 Data ophalen uit beide tabbladen...")
         ss = client.open("Eiweet validatie met AI")
         
@@ -477,7 +462,7 @@ def run_ingredient_logic():
         sheet_p.clear()
         sheet_p.update(values=[df_p.columns.tolist()] + df_p.where(pd.notnull(df_p), None).values.tolist(), range_name='A1')
         
-        status.update(label=f"✅ Stap 5 Voltooid. {num_review_final} producten vallen buiten de boot.", state="complete")
+        status.update(label=f"✅ Stap 4 Voltooid. {num_review_final} producten vallen buiten de boot.", state="complete")
 
     # Rapportage
     if num_review_final > 0:
@@ -486,13 +471,13 @@ def run_ingredient_logic():
         st.success("**Diepe analyse voltooid.** Alle producten konden succesvol worden onderbouwd door de ingrediëntenlijst.")
 
 def run_reports():
-    """Stap 6: Genereer Vendor Rapporten per supermarkt"""
+    """Stap 5: Genereer Vendor Rapporten per supermarkt"""
     client = get_google_sheet_client()
     if client is None:
         st.error("❌ Geen verbinding met Google Sheets.")
         return
 
-    with st.status("Stap 6: Rapporten per supermarkt genereren...") as status:
+    with st.status("Stap 5: Rapporten per supermarkt genereren...") as status:
         st.write("🔄 Hoofdtabel inladen...")
         ss = client.open("Eiweet validatie met AI")
         sheet_p = ss.worksheet("Producten Input")
@@ -539,19 +524,72 @@ def run_reports():
     # Eindrapportage
     st.success(f"**Alle rapporten zijn gegenereerd!** Je vindt nu voor elke supermarkt ({', '.join(vendors)}) een apart tabblad in je Google Sheet met de specifieke resultaten.")
 
+def run_full_pipeline():
+    """Voert Stap 1 t/m 5 automatisch achter elkaar uit"""
+    st.header("🚀 Volledige Pijplijn Starten")
+    
+    # We maken een grote container voor de voortgang
+    with st.container(border=True):
+        st.subheader("Voortgang van alle stappen")
+        
+        # Stap 1: Prep Ingredienten
+        st.markdown("### 1️⃣ Ingrediëntenlijst voorbereiden")
+        run_prep_ingredients()
+        
+        # Stap 2: AI Masterlijst Classificatie
+        st.markdown("---")
+        st.markdown("### 2️⃣ Masterlijst classificeren met AI")
+        run_ai_classifier()
+        
+        # Stap 3 & 4: AI First Pass & Review markering
+        st.markdown("---")
+        st.markdown("### 3️⃣ & 4️⃣ Product Analyse & Review check")
+        run_first_pass_and_review()
+        
+        # Stap 5: Diepe Ingrediënten Logica
+        st.markdown("---")
+        st.markdown("### 5️⃣ Diepe Ingrediënten-check (Feit-check)")
+        run_ingredient_logic()
+
+    st.balloons()
+    st.success("🎉 De volledige pijplijn is succesvol voltooid! Je Google Sheet is nu volledig up-to-date.")
+
+
 # --- 3. UI LAYOUT ---
-st.title("Eiweet Pipeline Manager 🍏")
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("1️⃣ Vul ingrediënten lijst op basis van producten", use_container_width=True): run_prep_ingredients()
-with col2:
-    if st.button("2️⃣ Classificeer ingrediëntenlijst met AI", use_container_width=True): run_ai_classifier()
 
-col3, col4 = st.columns(2)
-with col3:
-    if st.button("3️⃣ Check Eiweetgroep van alle producten met AI", use_container_width=True): run_first_pass_and_review()
-with col4:
-    if st.button("4️⃣ Check Eiweetgroep van lastige producten op basis van ingrediëntenlijst", use_container_width=True): run_ingredient_logic()
+def main():
+    # De titel en instructies staan nu VEILIG binnen main()
+    st.title("ProVeg Eiweet Validatie Manager 🌱")
 
-st.divider()
-if st.button("5️⃣ Genereer supermarkten/vendor rapporten", type="primary", use_container_width=True): run_reports()
+    st.info("""
+    ### 📖 Instructies
+    Deze app werkt met de bijbehorende Google Sheet: **"Eiweet validatie met AI"**.
+    
+    1. **Data:** Plak je data in **"Producten Input"**.
+    2. **Workflow:** Doorloop stappen **1 t/m 5** in die volgorde.
+    """)
+
+    # Sidebar voor de Master Run
+    st.sidebar.header("Automatische piloot")
+    if st.sidebar.button("🚀 MASTER RUN (Stap 1-5)", use_container_width=True, type="primary"):
+        run_full_pipeline()
+
+    # Knoppen op de hoofdpagina
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("1️⃣ Prep Ingrediëntenlijst", use_container_width=True): run_prep_ingredients()
+    with col2:
+        if st.button("2️⃣ AI Classificatie Masterlijst", use_container_width=True): run_ai_classifier()
+
+    col3, col4 = st.columns(2)
+    with col3:
+        if st.button("3️⃣ AI Product Analyse", use_container_width=True): run_first_pass_and_review()
+    with col4:
+        if st.button("4️⃣ Diepe Check (Feit-check)", use_container_width=True): run_ingredient_logic()
+
+    st.divider()
+    if st.button("5️⃣ Genereer Vendor Rapporten", use_container_width=True, type="primary"): run_reports()
+
+# Dit zorgt dat de app start zonder dubbele elementen
+if __name__ == "__main__":
+    main()
