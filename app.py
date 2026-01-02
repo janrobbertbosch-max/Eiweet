@@ -50,9 +50,9 @@ def run_prep_ingredients():
 
     with st.status("Stap 1: Ingrediënten voorbereiden...") as status:
         st.write("🔄 Data inladen uit Google Sheets...")
-        spreadsheet = client.open("Eiweet ingredienten")
-        sheet_master = spreadsheet.worksheet("Ingredienten")
-        sheet_products = spreadsheet.worksheet("Producten")
+        spreadsheet = client.open("Eiweet validatie met AI")
+        sheet_master = spreadsheet.worksheet("Ingredienten Database")
+        sheet_products = spreadsheet.worksheet("Producten Input")
         
         df_master = pd.DataFrame(sheet_master.get_all_records())
         df_products = pd.DataFrame(sheet_products.get_all_records())
@@ -123,7 +123,7 @@ def run_ai_classifier():
 
     with st.status("Stap 2: AI Classificatie (Masterlijst)...") as status:
         st.write("🔄 Masterlijst ophalen...")
-        sheet = client.open("Eiweet ingredienten").worksheet("Ingredienten")
+        sheet = client.open("Eiweet validatie met AI").worksheet("Ingredienten Database")
         df = pd.DataFrame(sheet.get_all_records())
         
         # Zoek naar rijen waar de classificatie nog leeg is
@@ -223,7 +223,7 @@ def run_first_pass_and_review():
     
     with st.status("Stap 3 & 4: Product classificatie & Review check...") as status:
         st.write("🔄 Productdata ophalen uit Google Sheets...")
-        sheet = client.open("Eiweet ingredienten").worksheet("Producten")
+        sheet = client.open("Eiweet validatie met AI").worksheet("Producten Input")
         df = pd.DataFrame(sheet.get_all_records())
 
         # Filter producten die nog een oordeel nodig hebben
@@ -242,11 +242,14 @@ def run_first_pass_and_review():
                 batch_num = i // batch_size + 1
                 status.write(f"⏳ Verwerken batch {batch_num}...")
 
-                # Prompt opbouwen met de DataFrame index als ID
+                # Prompt opbouwen met expert-persona en vraag naar rationale
                 prompt_items = [f"ID:{idx} | Product:{row['Productnaam']}" for idx, row in batch_df.iterrows()]
                 prompt = f"""
+                Je bent een senior voedingsmiddelenexpert gespecialiseerd in eiwitbronnen. 
                 Classificeer de volgende producten strikt als 'Plantaardig', 'Dierlijk' of 'Combinatie'.
-                Antwoord strikt in dit formaat: ID: oordeel
+                Geef per product één korte zin uitleg (rationale).
+
+                Antwoord STRIKT in dit formaat: ID: oordeel | rationale
                 
                 Producten:
                 {chr(10).join(prompt_items)}
@@ -256,29 +259,48 @@ def run_first_pass_and_review():
                     raw_response = call_gemini(prompt)
                     matches_in_batch = 0
                     
-                    # Parse de regels van de AI
+                    # De Onverwoestbare Parser met Rationale-ondersteuning
                     for line in raw_response.split('\n'):
-                        if ":" in line:
-                            # Split op de laatste dubbele punt (robuust tegen 'ID:123: Oordeel')
+                        line = line.strip()
+                        if not line or ":" not in line:
+                            continue
+                        
+                        # 1. Haal de ID op (eerste getal in de regel)
+                        idx_match = re.search(r'(\d+)', line)
+                        if not idx_match:
+                            continue
+                        idx = int(idx_match.group(1))
+                        
+                        # 2. Splits de regel op de '|' voor oordeel en rationale
+                        if "|" in line:
+                            parts = line.split("|", 1)
+                            oordeel_deel = parts[0].lower()
+                            rationale = parts[1].strip()
+                        else:
+                            # Backup als de AI de '|' vergeet
                             parts = line.rsplit(":", 1)
-                            label = parts[1].strip().replace(".", "").capitalize()
-                            
-                            # Zoek het eerste getal in het voorste deel
-                            idx_match = re.search(r'(\d+)', parts[0])
-                            
-                            if idx_match and label in geldige_class:
-                                idx = int(idx_match.group(1))
-                                if idx in df.index:
-                                    df.at[idx, 'First pass AI'] = label
-                                    # Datum EN Tijd opslaan
-                                    df.at[idx, 'First pass AI datum'] = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
-                                    matches_in_batch += 1
+                            oordeel_deel = parts[1].lower()
+                            rationale = "Geen rationale opgegeven."
+
+                        # 3. Trefwoorden zoeken voor het oordeel
+                        oordeel = None
+                        if "plantaardig" in oordeel_deel: oordeel = "Plantaardig"
+                        elif "dierlijk" in oordeel_deel: oordeel = "Dierlijk"
+                        elif "combinatie" in oordeel_deel: oordeel = "Combinatie"
+                        
+                        # 4. Opslaan in DataFrame als ID bestaat en oordeel herkend is
+                        if idx in df.index and oordeel:
+                            df.at[idx, 'First pass AI'] = oordeel
+                            df.at[idx, 'AI rationale'] = rationale
+                            # Timestamp met datum en tijd
+                            df.at[idx, 'First pass AI datum'] = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
+                            matches_in_batch += 1
                     
                     status.write(f"✅ Batch {batch_num} klaar: {matches_in_batch}/{len(batch_df)} producten herkend.")
                     
                 except Exception as e:
                     st.error(f"⚠️ Fout in batch {batch_num}: {e}")
-                
+                    
                 # Tussentijds opslaan om de 3 batches voor maximale veiligheid
                 if batch_num % 3 == 0:
                     sheet.update(values=[df.columns.tolist()] + df.where(pd.notnull(df), None).values.tolist(), range_name='A1')
@@ -379,11 +401,11 @@ def run_ingredient_logic():
 
     with st.status("Stap 5: Ingrediënten-check per product...") as status:
         st.write("🔄 Data ophalen uit beide tabbladen...")
-        ss = client.open("Eiweet ingredienten")
+        ss = client.open("Eiweet validatie met AI")
         
         # Haal de masterlijst en de producten op
-        df_master = pd.DataFrame(ss.worksheet("Ingredienten").get_all_records())
-        sheet_p = ss.worksheet("Producten")
+        df_master = pd.DataFrame(ss.worksheet("Ingredienten Database").get_all_records())
+        sheet_p = ss.worksheet("Producten Input")
         df_p = pd.DataFrame(sheet_p.get_all_records())
 
         # Maak een 'opzoekboek' (dictionary) van de masterlijst voor snelheid
@@ -395,41 +417,45 @@ def run_ingredient_logic():
 
         st.write(f"🔬 Analyse van {len(df_p)} producten op ingrediënt-niveau...")
 
-        def analyze_product(row):
-            # Pak de opgeschoonde ingrediënten en splits ze in losse woorden
+        for idx, row in df_p.iterrows():
             clean_text = str(row['Ingredients clean']).lower()
             ingrs = [x.strip() for x in re.split(r"[ ,]", clean_text) if len(x.strip()) > 2]
             
-            found_wel = []
-            plant, dier = False, False
+            found_plant = []
+            found_dier = []
             
             for i in ingrs:
                 if i in m_dict:
                     rol, cl = m_dict[i]
                     if rol == 'wel':
-                        found_wel.append(i.capitalize())
-                        if 'plantaardig' in cl: plant = True
-                        if 'dierlijk' in cl: dier = True
+                        if 'plantaardig' in cl:
+                            found_plant.append(i.capitalize())
+                        elif 'dierlijk' in cl:
+                            found_dier.append(i.capitalize())
             
-            # Bepaal de categorie op basis van de gevonden bronnen
-            if not found_wel:
-                return "Geen eiwit", "", "Geen bekende eiwitbronnen gevonden in ingrediëntenlijst."
+            found_plant = list(set(found_plant))
+            found_dier = list(set(found_dier))
+            all_wel = found_plant + found_dier
             
-            if plant and dier:
-                cat = "Combinatie"
-            elif plant:
-                cat = "Plantaardig"
-            elif dier:
-                cat = "Dierlijk"
-            else:
-                cat = "Onbekend"
-                
-            return cat, ", ".join(list(set(found_wel))), f"Bevat: {len(found_wel)} eiwitbron(nen)."
+            # --- DE CRUCIALE STAP: Alleen verwerken bij een match ---
+            if all_wel:
+                if found_plant and found_dier:
+                    cat = "Combinatie"
+                    rationale = f"{found_plant[0]} is plantaardig en {found_dier[0]} is dierlijk."
+                elif found_plant:
+                    cat = "Plantaardig"
+                    rationale = f"Bevat plantaardige bron(nen): {', '.join(found_plant)}."
+                elif found_dier:
+                    cat = "Dierlijk"
+                    rationale = f"Bevat dierlijke bron(nen): {', '.join(found_dier)}."
+                else:
+                    cat = "Onbekend"
+                    rationale = "Eiwitbronnen gevonden maar type onbekend."
 
-        # Pas de analyse toe op elke rij
-        df_p[['Ingredienten gebaseerde eiweet groep', 'Eiwitbronnen', 'AI rationale']] = df_p.apply(
-            lambda r: pd.Series(analyze_product(r)), axis=1
-        )
+                # Update alleen deze specifieke velden in het DataFrame
+                df_p.at[idx, 'Ingredienten gebaseerde eiweet groep'] = cat
+                df_p.at[idx, 'Eiwitbronnen'] = ", ".join(all_wel)
+                df_p.at[idx, 'AI rationale'] = rationale
 
         # Update de 'Handmatige review nodig' vlag
         # We vlaggen het product als de supermarkt-label afwijkt van BEIDE AI-checks
@@ -468,8 +494,8 @@ def run_reports():
 
     with st.status("Stap 6: Rapporten per supermarkt genereren...") as status:
         st.write("🔄 Hoofdtabel inladen...")
-        ss = client.open("Eiweet ingredienten")
-        sheet_p = ss.worksheet("Producten")
+        ss = client.open("Eiweet validatie met AI")
+        sheet_p = ss.worksheet("Producten Input")
         df = pd.DataFrame(sheet_p.get_all_records())
         
         # Haal alle unieke supermarkten op (en negeer lege cellen)
