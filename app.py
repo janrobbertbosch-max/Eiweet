@@ -572,7 +572,7 @@ def run_full_pipeline():
 # --- 3. UI LAYOUT ---
 
 def main():
-    st.title("Eiweet Validatie Manager - Anke versie 🌱")
+    st.title("Eiweet Validatie Manager 🌱")
 
     st.info("""
     ### 📖 Instructies
@@ -605,4 +605,5 @@ def main():
         run_full_pipeline()
 
 if __name__ == "__main__":
+
     main()
