@@ -278,52 +278,62 @@ def run_first_pass_and_review():
                 Classificeer de volgende producten strikt als 'Plantaardig', 'Dierlijk' of 'Combinatie'.
                 Geef per product één korte zin uitleg (rationale).
 
-                Antwoord STRIKT in dit formaat: ID: oordeel | rationale
+                Antwoord ALLEEN in dit exacte formaat, zonder extra tekst:
+
+                ID:<ID> | oordeel:<Plantaardig/Dierlijk/Combinatie> | rationale:<korte uitleg>
+
+                Voorbeeld:
+                ID:123 | oordeel:Plantaardig | rationale:Gemaakt van sojabonen, volledig plantaardig.
                 
+                Geef voor elke regel in de lijst hieronder precies één regel output in hetzelfde formaat.
                 Producten:
                 {chr(10).join(prompt_items)}
                 """
                 
                 try:
                     raw_response = call_gemini(prompt)
+                    # ANKE toevoeging Debug: sla ruwe AI-output op voor alle rijen in deze batch
+                    # for idx in batch_df.index:
+                    #     df.at[idx, 'Raw AI response'] = raw_response
+                    # ANKE einde toevoeging
                     matches_in_batch = 0
                     
                     # De Onverwoestbare Parser met Rationale-ondersteuning
-                    for line in raw_response.split('\n'):
-                        line = line.strip()
-                        if not line or ":" not in line:
-                            continue
+                    # for line in raw_response.split('\n'):
+                    #     line = line.strip()
+                    #     if not line or ":" not in line:
+                    #         continue
                         
-                        # 1. Haal de ID op (eerste getal in de regel)
-                        idx_match = re.search(r'(\d+)', line)
-                        if not idx_match:
-                            continue
-                        idx = int(idx_match.group(1))
-                        
-                        # 2. Splits de regel op de '|' voor oordeel en rationale
-                        if "|" in line:
-                            parts = line.split("|", 1)
-                            oordeel_deel = parts[0].lower()
-                            rationale = parts[1].strip()
-                        else:
-                            # Backup als de AI de '|' vergeet
-                            parts = line.rsplit(":", 1)
-                            oordeel_deel = parts[1].lower()
-                            rationale = "Geen rationale opgegeven."
+                     # AI-output in losse regels splitsen
+                    lines = [l.strip() for l in raw_response.split("\n") if "ID:" in l]
 
-                        # 3. Trefwoorden zoeken voor het oordeel
-                        oordeel = None
-                        if "plantaardig" in oordeel_deel: oordeel = "Plantaardig"
-                        elif "dierlijk" in oordeel_deel: oordeel = "Dierlijk"
-                        elif "combinatie" in oordeel_deel: oordeel = "Combinatie"
-                        
+
+                    for i, line in enumerate(lines):
+                        if i >= len(batch_df):
+                            break
+
+                        real_idx = batch_df.index[i]
+                        # ANKE: sla het AI-antwoord per rij op
+                        df.at[real_idx,'AI first pass antwoord'] = line
+
+                        # 2. Oordeel ophalen
+                        oordeel_match = re.search(r'oordeel\s*[:：]\s*([A-Za-zÀ-ÿ]+)', line, re.IGNORECASE)
+                        if not oordeel_match:
+                            st.write("GEEN OORDEEL GEVONDEN IN:", line)
+                            continue
+                        oordeel = oordeel_match.group(1).capitalize()
+
+                        # 3. Rationale ophalen
+                        rationale_match = re.search(r'rationale\s*:\s*(.+)', line, re.IGNORECASE)
+                        rationale = rationale_match.group(1).strip() if rationale_match else ""
+
                         # 4. Opslaan in DataFrame als ID bestaat en oordeel herkend is
-                        if idx in df.index and oordeel:
-                            df.at[idx, 'First pass AI'] = oordeel
-                            df.at[idx, 'AI rationale'] = rationale
-                            # Timestamp met datum en tijd
-                            df.at[idx, 'First pass AI datum'] = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
-                            matches_in_batch += 1
+                        #if idx in df.index and oordeel:
+                        df.at[real_idx, 'First pass AI'] = oordeel
+                        df.at[real_idx, 'AI rationale'] = rationale
+                        # Timestamp met datum en tijd
+                        df.at[real_idx, 'First pass AI datum'] = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
+                        matches_in_batch += 1
                     
                     status.write(f"✅ Batch {batch_num} klaar: {matches_in_batch}/{len(batch_df)} producten herkend.")
                     
@@ -332,7 +342,12 @@ def run_first_pass_and_review():
                     
                 # Tussentijds opslaan om de 3 batches voor maximale veiligheid
                 if batch_num % 3 == 0:
-                    sheet.update(values=[df.columns.tolist()] + df.where(pd.notnull(df), None).values.tolist(), range_name='A1')
+                    # Anke vervanging om error te voorkomen:
+                    #sheet.update(values=[df.columns.tolist()] + df.where(pd.notnull(df), None).values.tolist(), range_name='A1')
+                    sheet.clear()
+                    sheet.update("A1", [df.columns.tolist()])
+                    sheet.update("A2", df.astype(str).where(pd.notnull(df), "").values.tolist())
+
                     status.write(f"💾 Tussentijdse backup opgeslagen om {datetime.datetime.now().strftime('%H:%M:%S')}")
 
                 # Korte pauze voor API stabiliteit
@@ -426,21 +441,21 @@ def run_ingredient_logic():
             if all_wel:
                 if found_plant and found_dier:
                     cat = "Combinatie"
-                    rationale = f"{found_plant[0]} is plantaardig en {found_dier[0]} is dierlijk."
+                    ingredientrationale = f"{found_plant[0]} is plantaardig en {found_dier[0]} is dierlijk."
                 elif found_plant:
                     cat = "Plantaardig"
-                    rationale = f"Bevat plantaardige bron(nen): {', '.join(found_plant)}."
+                    ingredientrationale = f"Bevat plantaardige bron(nen): {', '.join(found_plant)}."
                 elif found_dier:
                     cat = "Dierlijk"
-                    rationale = f"Bevat dierlijke bron(nen): {', '.join(found_dier)}."
+                    ingredientrationale = f"Bevat dierlijke bron(nen): {', '.join(found_dier)}."
                 else:
                     cat = "Onbekend"
-                    rationale = "Eiwitbronnen gevonden maar type onbekend."
+                    ingredientrationale = "Eiwitbronnen gevonden maar type onbekend."
 
                 # Update alleen deze specifieke velden in het DataFrame
                 df_p.at[idx, 'Ingredienten gebaseerde eiweet groep'] = cat
                 df_p.at[idx, 'Eiwitbronnen'] = ", ".join(all_wel)
-                df_p.at[idx, 'AI rationale'] = rationale
+                df_p.at[idx, 'AI ingredientrationale'] = ingredientrationale
 
         # Update de 'Handmatige review nodig' vlag
         # We vlaggen het product als de supermarkt-label afwijkt van BEIDE AI-checks
@@ -533,7 +548,7 @@ def run_full_pipeline():
         st.subheader("Voortgang van alle stappen")
         
         # Stap 1: Prep Ingredienten
-        st.markdown("### 1️⃣ Ingrediëntenlijst voorbereiden")
+        st.markdown("### 1️⃣ Ingrediëntenmasterlijst voorbereiden")
         run_prep_ingredients()
         
         # Stap 2: AI Masterlijst Classificatie
@@ -557,7 +572,7 @@ def run_full_pipeline():
 # --- 3. UI LAYOUT ---
 
 def main():
-    st.title("ProVeg Eiweet Validatie Manager 🌱")
+    st.title("Eiweet Validatie Manager - Anke versie 🌱")
 
     st.info("""
     ### 📖 Instructies
