@@ -272,10 +272,10 @@ def run_first_pass_and_review():
                 status.write(f"⏳ Verwerken batch {batch_num}...")
 
                 # Prompt opbouwen met expert-persona en vraag naar rationale
-                prompt_items = [f"ID:{idx} | Product:{row['Productnaam']} | Productcategorie:{row['Categorie']} | Subcategorie:{row['Subcategorie']}" for idx, row in batch_df.iterrows()]
+                prompt_items = [f"ID:{idx} | Product:{row['Productnaam']}" for idx, row in batch_df.iterrows()]
                 prompt = f"""
                 Je bent een senior voedingsmiddelenexpert gespecialiseerd in eiwitbronnen. 
-                Classificeer de volgende producten strikt als 'Plantaardig', 'Dierlijk' of 'Combinatie' op basis van de productnaam, de productcategorie en de subcategorie.
+                Classificeer de volgende producten strikt als 'Plantaardig', 'Dierlijk' of 'Combinatie'.
                 Geef per product één korte zin uitleg (rationale).
 
                 Antwoord ALLEEN in dit exacte formaat, zonder extra tekst:
@@ -607,4 +607,5 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
