@@ -257,7 +257,7 @@ def run_first_pass_and_review():
 
         # Filter producten die nog een oordeel nodig hebben
         geldige_class = ['Dierlijk', 'Plantaardig', 'Combinatie']
-        mask = (~df['First pass AI'].astype(str).isin(geldige_class))
+        mask = (~df['Productindeling AI'].astype(str).isin(geldige_class))
         to_process = df[mask].copy()
         
         total_to_process = len(to_process)
@@ -272,10 +272,10 @@ def run_first_pass_and_review():
                 status.write(f"⏳ Verwerken batch {batch_num}...")
 
                 # Prompt opbouwen met expert-persona en vraag naar rationale
-                prompt_items = [f"ID:{idx} | Product:{row['Productnaam']}" for idx, row in batch_df.iterrows()]
+                prompt_items = [f"ID:{idx} | Product:{row['Productnaam']} | Productcategorie:{row['Categorie']} | Subcategorie:{row['Subcategorie']}" for idx, row in batch_df.iterrows()]
                 prompt = f"""
                 Je bent een senior voedingsmiddelenexpert gespecialiseerd in eiwitbronnen. 
-                Classificeer de volgende producten strikt als 'Plantaardig', 'Dierlijk' of 'Combinatie'.
+                Classificeer de volgende producten strikt als 'Plantaardig', 'Dierlijk' of 'Combinatie' op basis van de productnaam, de productcategorie en de subcategorie.
                 Geef per product één korte zin uitleg (rationale).
 
                 Antwoord ALLEEN in dit exacte formaat, zonder extra tekst:
@@ -314,7 +314,7 @@ def run_first_pass_and_review():
 
                         real_idx = batch_df.index[i]
                         # ANKE: sla het AI-antwoord per rij op
-                        df.at[real_idx,'AI first pass antwoord'] = line
+                        df.at[real_idx,'AI Productindeling antwoord'] = line
 
                         # 2. Oordeel ophalen
                         oordeel_match = re.search(r'oordeel\s*[:：]\s*([A-Za-zÀ-ÿ]+)', line, re.IGNORECASE)
@@ -329,10 +329,10 @@ def run_first_pass_and_review():
 
                         # 4. Opslaan in DataFrame als ID bestaat en oordeel herkend is
                         #if idx in df.index and oordeel:
-                        df.at[real_idx, 'First pass AI'] = oordeel
+                        df.at[real_idx, 'Productindeling AI'] = oordeel
                         df.at[real_idx, 'AI rationale'] = rationale
                         # Timestamp met datum en tijd
-                        df.at[real_idx, 'First pass AI datum'] = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
+                        df.at[real_idx, 'Productindeling AI AI datum'] = datetime.datetime.now().strftime("%d-%m-%Y %H:%M")
                         matches_in_batch += 1
                     
                     status.write(f"✅ Batch {batch_num} klaar: {matches_in_batch}/{len(batch_df)} producten herkend.")
@@ -353,7 +353,7 @@ def run_first_pass_and_review():
                 # Korte pauze voor API stabiliteit
                 time.sleep(0.5)
         else:
-            st.write("✅ Alle producten zijn al voorzien van een 'First pass AI' label.")
+            st.write("✅ Alle producten zijn al voorzien van een 'Productindeling AI' label.")
 
         # --- B. STANDAARDISATIE & VERGELIJKING ---
         st.write("📊 Vergelijken met supermarkt labels...")
@@ -368,7 +368,7 @@ def run_first_pass_and_review():
         df['Gestandaardiseerd supermarkt label'] = df['Eiweetgroep Supermarkt'].apply(standardize)
         
         def determine_review(row):
-            ai_val = str(row['First pass AI']).strip()
+            ai_val = str(row['Productindeling AI']).strip()
             supermarkt_val = str(row['Gestandaardiseerd supermarkt label']).strip()
             if ai_val == "" or supermarkt_val == "Onbekend":
                 return "ja"
@@ -461,7 +461,7 @@ def run_ingredient_logic():
         # We vlaggen het product als de supermarkt-label afwijkt van BEIDE AI-checks
         def final_review_check(row):
             sm_label = str(row['Gestandaardiseerd supermarkt label'])
-            ai_first = str(row['First pass AI'])
+            ai_first = str(row['Productindeling AI'])
             ingr_label = str(row['Ingredienten gebaseerde eiweet groep'])
             
             if sm_label != ai_first and sm_label != ingr_label:
@@ -556,7 +556,7 @@ def run_full_pipeline():
         st.markdown("### 2️⃣ Masterlijst classificeren met AI")
         run_ai_classifier()
         
-        # Stap 3 & 4: AI First Pass & Review markering
+        # Stap 3 & 4: Productindeling AI & Review markering
         st.markdown("---")
         st.markdown("### 3️⃣ & 4️⃣ Product Analyse & Review check")
         run_first_pass_and_review()
@@ -607,3 +607,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
